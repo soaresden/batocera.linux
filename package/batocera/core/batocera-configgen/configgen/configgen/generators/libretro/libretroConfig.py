@@ -160,6 +160,8 @@ def createLibretroConfig(system, controllers, rom, bezel, gameResolution):
     ## BlueMSX choices by System
     if(system.name in systemToBluemsx):
         if system.config['core'] == 'bluemsx':
+            if not os.path.exists("/userdata/bios/bluemsx"):
+                os.makedirs("/userdata/bios/bluemsx") # required for bluemsx to start
             retroarchConfig['input_libretro_device_p1'] = systemToP1Device[system.name]
             retroarchConfig['input_libretro_device_p2'] = systemToP2Device[system.name]
 
