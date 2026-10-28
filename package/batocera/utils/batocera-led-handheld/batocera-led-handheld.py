@@ -25,6 +25,10 @@ You can use PULSE, RAINBOW, CHROMA and OFF as rgb_color for special effects.
 ESCOLOR is the default one set with sliders in EmulationStation
 PULSE_RRGGBB and BLINK_RRGGBB pulse or blink a given color.
 
+On handhelds with a led ring per stick, led.sticks=left or right in batocera.conf
+gives each stick its own led.left.* and led.right.* settings (mode, colour, battery
+levels), and the shared led.* ones are used for what a stick does not set.
+
 With the BATTERY led mode in EmulationStation, the leds show the battery level.
 Its levels are set in EmulationStation, or in batocera.conf, default is:
 
@@ -130,9 +134,9 @@ def load_config(fname: Path) -> list[str]:
     return newconfig
 
 # Battery led mode levels as battery_threshold=rgb_color, highest first, then the charging and full colors
-def battery_config() -> tuple[list[str], str, str]:
+def battery_config(prefix="led.") -> tuple[list[str], str, str]:
     levels: list[str] = []
-    for value in [batoled.batoconf("led.battery.levels") or "", BATTERY_LEVELS]:
+    for value in [batoled.ledconf("battery.levels", prefix) or "", BATTERY_LEVELS]:
         for item in value.split(","):
             level, _, color = item.strip().partition(":")
             if level.isdigit() and int(level) <= 100 and color:
@@ -140,7 +144,7 @@ def battery_config() -> tuple[list[str], str, str]:
         if levels:
             break
     levels.sort(reverse=True)
-    return levels, batoled.batoconf("led.battery.charging") or "PULSE", batoled.batoconf("led.battery.full") or "BLINK_00FF00"
+    return levels, batoled.ledconf("battery.charging", prefix) or "PULSE", batoled.ledconf("battery.full", prefix) or "BLINK_00FF00"
 
 # Color of the current battery level, or the charging one while plugged in
 def battery_action(level, status, batteryconfig):
@@ -159,8 +163,13 @@ def battery_action(level, status, batteryconfig):
         return f"PULSE_{color}" if len(color) == 6 else action
     return plugged
 
+# a led ring per stick, set apart in EmulationStation
+def split_sticks(led):
+    return hasattr(led, "side") and batoled.batoconf("led.sticks") in ["left", "right"]
+
 # Check the current battery level and adjust led color
-def led_check(led):
+# returns when the sticks are split or joined again, to start the right loops
+def led_check(led, prefix="led.", split=False):
     ledconfig = ["100=009900", "15=ESCOLOR", "10=CC3333", "5=FF0000", "3=PULSE"] # Default values when no config file
     tmpconfig = load_config(CONFIG_FILE)
     if len(tmpconfig) > 0:
@@ -170,9 +179,12 @@ def led_check(led):
     last_state = None
     while True:
         try:
+            if split_sticks(led) != split:
+                return
             if batoled.batoconf("led.enabled") == "0":
                 if color_changes_allowed():
                     led.set_color("000000") # Ensure the LED is physically off
+                    last_state = None
                 time.sleep(CHECK_INTERVAL)
                 continue
         except Exception:
@@ -183,9 +195,9 @@ def led_check(led):
                     open(PATH + '/status','r') as st:
                 bt = tp.readline().strip()
                 ch = st.readline().strip()
-                mode = batoled.batoconf("led.mode") or "static"
+                mode = batoled.ledconf("mode", prefix) or "static"
                 if mode == "battery":
-                    block = battery_action(int(bt), ch, battery_config())
+                    block = battery_action(int(bt), ch, battery_config(prefix))
                 else:
                     if (ch == "Charging") or (ch == "Full"):
                         bt = '100'
@@ -202,6 +214,9 @@ def led_check(led):
                         target_action = "CHROMA"
                     elif mode == "pulse":
                         target_action = "PULSE"
+                    elif split:
+                        # EmulationStation only previews the colour of one stick, the daemon applies it
+                        target_action = "".join(batoled.dec_to_hex(c) for c in batoled.batoconf_color(prefix))
 
                 # PULSE_RRGGBB and BLINK_RRGGBB: draw frames until the next check, without reading the battery each frame
                 if batoled.getEffectRGB(target_action) is not None:
@@ -270,11 +285,16 @@ if len(sys.argv) > 1:
     if sys.argv[1] == "start":
         try:
             led.set_brightness_conf()
-            t = Thread(target=led_check, args=(led,))
-            t.start()
+            while True:
+                split = split_sticks(led)
+                sticks = [(led.side("left"), "led.left."), (led.side("right"), "led.right.")] if split else [(led, "led.")]
+                threads = [Thread(target=led_check, args=(stick, prefix, split)) for stick, prefix in sticks]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
         except Exception as e:
             print (f"Could not launch daemon: {e}")
-            t.stop()
     elif sys.argv[1] in ["stop", "off"]:
         led.turn_off()
     elif sys.argv[1] in ["retroachievement", "rainbow"]:
@@ -307,7 +327,8 @@ if len(sys.argv) > 1:
     elif sys.argv[1] == "get_color":
         print(led.get_color())
     elif sys.argv[1] == "battery_profile":
-        (levels, charging, full) = battery_config()
+        # optional stick: left or right
+        (levels, charging, full) = battery_config(f"led.{sys.argv[2]}." if len(sys.argv) > 2 else "led.")
         for level in reversed(levels):
             print(level.strip())
         print(f'charging={charging}')

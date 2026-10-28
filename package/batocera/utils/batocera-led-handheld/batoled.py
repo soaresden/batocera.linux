@@ -36,11 +36,11 @@ LED_CHANGE_TIME = 120
 forced_effect = False
 
 # Ecosystem Interruption Check
-def check_interrupt(expected_mode):
+def check_interrupt(expected_mode, prefix="led."):
     if forced_effect:
         return False
     # Check if user selected another mode
-    if batoconf("led.mode") != expected_mode:
+    if ledconf("mode", prefix) != expected_mode:
         return True
     # Check if color changes are locked/blocked
     try:
@@ -157,8 +157,13 @@ def batoconf(key):
             return val
     return _conf_lookup(SYSCONFIGS, key)
 
-def batoconf_color():
-    rgb = batoconf("led.colour")
+# led setting of one stick (led.left.colour...), or the one shared by both
+def ledconf(key, prefix="led."):
+    val = batoconf(prefix + key) if prefix != "led." else None
+    return val if val else batoconf("led." + key)
+
+def batoconf_color(prefix="led."):
+    rgb = ledconf("colour", prefix)
     if rgb == None:
         rgb = DEFAULT_ES_COLOR
     try:
@@ -707,6 +712,16 @@ class dual_multiled(object):
             self.colour_index = ['red', 'green', 'blue']
         # multi_intensity kept open, the effects write a frame every 0.1 s
         self.intensity_fds = {}
+        self.prefix = "led."
+
+    def side(self, name):
+        # one stick only, with its own led.left.* / led.right.* settings
+        stick = dual_multiled()
+        stick.left_paths = self.left_paths if name == "left" else []
+        stick.right_paths = self.right_paths if name == "right" else []
+        stick.all_paths = stick.left_paths + stick.right_paths
+        stick.prefix = f"led.{name}."
+        return stick
 
     def _intensity(self, r, g, b):
         values = {'red': r, 'green': g, 'blue': b}
@@ -745,7 +760,7 @@ class dual_multiled(object):
         b_conf = batoconf_brightness()
         
         if rgb == "ESCOLOR":
-            r, g, b = batoconf_color()
+            r, g, b = batoconf_color(self.prefix)
         elif rgb == "RAINBOW":
             self.rainbow_effect()
             return
@@ -793,7 +808,7 @@ class dual_multiled(object):
 
         # Create a chasing color wheel using quadrant phase-shifting (Rainbow)
         for i in range(0, EFFECT_STEP):
-            if check_interrupt("rainbow"):
+            if check_interrupt("rainbow", self.prefix):
                 break
             # Sweep Left Joystick quadrants
             for j, p in enumerate(self.left_paths):
@@ -823,7 +838,7 @@ class dual_multiled(object):
             
             time.sleep(EFFECT_DURATION/EFFECT_STEP)
             
-        current_mode = batoconf("led.mode")
+        current_mode = ledconf("mode", self.prefix)
         if current_mode not in ["rainbow", "chroma", "pulse"]:
             self.set_color("ESCOLOR")
 
@@ -832,28 +847,28 @@ class dual_multiled(object):
 
         # Cycle all segments in unison through the spectrum (Chroma / Color Cycle) [3]
         for i in range(0, EFFECT_STEP):
-            if check_interrupt("chroma"):
+            if check_interrupt("chroma", self.prefix):
                 break
             o = getRainbowRGB(float(i/EFFECT_STEP))
             r, g, b = hex_to_dec(o[0:2]), hex_to_dec(o[2:4]), hex_to_dec(o[4:6])
             self._write_hardware(b_conf, r, g, b)
             time.sleep((EFFECT_DURATION * 2) / EFFECT_STEP)
             
-        current_mode = batoconf("led.mode")
+        current_mode = ledconf("mode", self.prefix)
         if current_mode not in ["rainbow", "chroma", "pulse"]:
             self.set_color("ESCOLOR")
 
     def pulse_effect(self):
-        r, g, b = batoconf_color()
+        r, g, b = batoconf_color(self.prefix)
         base_hex = f"{dec_to_hex(r)}{dec_to_hex(g)}{dec_to_hex(b)}"
         for i in range(0, EFFECT_STEP):
-            if check_interrupt("pulse"):
+            if check_interrupt("pulse", self.prefix):
                 break
             o = getPulseRGB(i, EFFECT_STEP, base_hex)
             self.set_color(o)
             time.sleep(PULSE_DURATION/EFFECT_STEP)
             
-        current_mode = batoconf("led.mode")
+        current_mode = ledconf("mode", self.prefix)
         if current_mode not in ["rainbow", "chroma", "pulse"]:
             self.set_color("ESCOLOR")
 
